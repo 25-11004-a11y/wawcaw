@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body, #root {
+    overscroll-behavior: none;
+    -webkit-overscroll-behavior: none;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: 'Gowun Dodum', sans-serif;
+    color: #3A3350;
+    background-color: #FFF8EE;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+.font-jua {
+  font-family: 'Jua', sans-serif;
+}
+
+.font-body {
+  font-family: 'Gowun Dodum', sans-serif;
+}
+
+/* Polka dot subtle background as seen in wireframes */
+.factory-bg {
+  background-color: #FFF8EE;
+  background-image: radial-gradient(#ECD5BD 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+/* Striped pattern for the '짠! 보기' hidden cover */
+.stripe-paper-pattern {
+  background-color: #F1EDFA;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(185, 163, 255, 0.22),
+    rgba(185, 163, 255, 0.22) 14px,
+    transparent 14px,
+    transparent 28px
+  );
+}
+
+/* Jelly Button specifications */
+.jelly-btn {
+  transition: transform 0.1s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.1s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 0 #3A3350;
+}
+.jelly-btn:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 #3A3350;
+}
+
+.jelly-card {
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 7px 0 #3A3350;
+}
+.jelly-card:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 3px 0 #3A3350;
+}
+
+/* Screen enter bounce */
+@keyframes bounceIn {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: bounceIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* Wobble / Shake for secret cover */
+@keyframes wobbleCover {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px) rotate(-1deg); }
+  40% { transform: translateX(6px) rotate(1deg); }
+  60% { transform: translateX(-4px) rotate(-0.5deg); }
+  80% { transform: translateX(4px) rotate(0.5deg); }
+}
+
+.animate-wobble {
+  animation: wobbleCover 0.4s ease-in-out;
+}
+
+/* Gentle mascot breath */
+@keyframes robotBreath {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-robot-breath {
+  animation: robotBreath 2.6s ease-in-out infinite;
+}
+
+/* Bouncy brush notification when trying to finish with 0 strokes */
+@keyframes bounceAlert {
+  0%, 100% { transform: translateY(0) scale(1); }
+  30% { transform: translateY(-8px) scale(1.15); }
+  60% { transform: translateY(2px) scale(0.95); }
+}
+
+.animate-brush-bounce {
+  animation: bounceAlert 0.5s ease-in-out;
+}

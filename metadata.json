@@ -1,0 +1,6 @@
+{
+  "name": "뚝딱 대칭 공장",
+  "description": "만 5세~초등 2학년 어린이를 위한 신나는 선대칭과 점대칭 도형 공장! 반쪽만 그리면 뚝딱 완성돼요.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
