@@ -45,10 +45,14 @@ export default function App() {
     setScreen('pattern');
   };
 
-  // Trace pattern in Mirror Workshop
-  const handleTracePattern = (pattern: TraditionalPattern) => {
-    setMode('mirror');
-    setAxis('vertical');
+  // Trace pattern in Workshop (mirror or spin)
+  const handleTracePattern = (
+    pattern: TraditionalPattern,
+    targetMode: Mode = 'mirror',
+    targetAxis: MirrorAxis = 'vertical'
+  ) => {
+    setMode(targetMode);
+    setAxis(targetMode === 'spin' ? 'point' : targetAxis);
     setStrokes([]);
     setTracePattern(pattern);
     setScreen('workshop');

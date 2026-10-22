@@ -63,3 +63,33 @@ describe('Symmetry Pure Functions', () => {
     expect(spinTransforms[1](samplePoint)).toEqual({ x: 0.8, y: 0.7 });
   });
 });
+
+import { TRADITIONAL_PATTERNS } from './patterns';
+
+describe('Built-in Traditional Patterns Symmetry Specification', () => {
+  it('correctly maps all 6 built-in patterns to their specified workshop mode and axis', () => {
+    const map = new Map(TRADITIONAL_PATTERNS.map((p) => [p.id, p]));
+
+    // 연꽃무늬: 거울, 세로 축
+    expect(map.get('lotus')?.targetMode).toBe('mirror');
+    expect(map.get('lotus')?.targetAxis).toBe('vertical');
+
+    // 태극무늬: 빙글(점대칭)
+    expect(map.get('taegeuk')?.targetMode).toBe('spin');
+
+    // 박쥐무늬: 거울, 세로 축
+    expect(map.get('bat')?.targetMode).toBe('mirror');
+    expect(map.get('bat')?.targetAxis).toBe('vertical');
+
+    // 바람개비무늬: 빙글(점대칭)
+    expect(map.get('pinwheel')?.targetMode).toBe('spin');
+
+    // 꽃살무늬 격자: 거울, 둘 다
+    expect(map.get('flower_lattice')?.targetMode).toBe('mirror');
+    expect(map.get('flower_lattice')?.targetAxis).toBe('both');
+
+    // 구름무늬: 대칭 아님
+    expect(map.get('cloud')?.targetMode).toBe('none');
+  });
+});
+

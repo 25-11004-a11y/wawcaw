@@ -767,8 +767,8 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
             
             {/* Trace Pattern Underlay (behind canvas) */}
             {tracePattern && showUnderlay && (
-              <div className="absolute inset-0 pointer-events-none p-6 flex items-center justify-center opacity-25 z-0">
-                {tracePattern.renderSvg('w-full h-full')}
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-30 z-0 overflow-hidden">
+                {tracePattern.renderSvg('w-full h-full max-w-full max-h-full object-contain')}
               </div>
             )}
 

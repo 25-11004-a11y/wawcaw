@@ -1,4 +1,7 @@
 import React from 'react';
+import { Mode, MirrorAxis } from './constants';
+
+export type PatternTargetMode = Mode | 'none';
 
 export interface TraditionalPattern {
   id: string;
@@ -9,6 +12,8 @@ export interface TraditionalPattern {
   description: string;
   imageUrl?: string;
   isApi?: boolean;
+  targetMode?: PatternTargetMode;
+  targetAxis?: MirrorAxis;
   renderSvg: (className?: string) => React.ReactNode;
 }
 
@@ -20,6 +25,8 @@ export const TRADITIONAL_PATTERNS: TraditionalPattern[] = [
     source: '한국문화정보원',
     symmetryType: '세로 선대칭',
     description: '세로선으로 접으면 꼭 겹치는 예쁜 연꽃무늬예요.',
+    targetMode: 'mirror',
+    targetAxis: 'vertical',
     renderSvg: (className = 'w-full h-full') => (
       <svg viewBox="0 0 100 100" className={className} fill="none">
         {/* Center lotus petal */}
@@ -72,6 +79,7 @@ export const TRADITIONAL_PATTERNS: TraditionalPattern[] = [
     source: '한국문화정보원',
     symmetryType: '점대칭 (선대칭 아님)',
     description: '180도 빙글 돌려도 똑같은 점대칭 무늬예요.',
+    targetMode: 'spin',
     renderSvg: (className = 'w-full h-full') => (
       <svg viewBox="0 0 100 100" className={className}>
         {/* Outer border circle */}
@@ -100,6 +108,8 @@ export const TRADITIONAL_PATTERNS: TraditionalPattern[] = [
     source: '한국문화정보원',
     symmetryType: '세로 선대칭',
     description: '복을 가져다주는 박쥐가 날개를 활짝 편 선대칭 무늬예요.',
+    targetMode: 'mirror',
+    targetAxis: 'vertical',
     renderSvg: (className = 'w-full h-full') => (
       <svg viewBox="0 0 100 100" className={className} fill="none">
         {/* Center head / body */}
@@ -139,6 +149,7 @@ export const TRADITIONAL_PATTERNS: TraditionalPattern[] = [
     source: '한국문화정보원',
     symmetryType: '점대칭',
     description: '빙글빙글 돌아가는 점대칭 바람개비예요.',
+    targetMode: 'spin',
     renderSvg: (className = 'w-full h-full') => (
       <svg viewBox="0 0 100 100" className={className} fill="none">
         <circle cx="50" cy="50" r="44" stroke="#3A3350" strokeWidth="3.5" fill="#FAF8FF" />
@@ -182,6 +193,8 @@ export const TRADITIONAL_PATTERNS: TraditionalPattern[] = [
     source: '한국문화정보원',
     symmetryType: '선대칭과 점대칭 모두',
     description: '가로, 세로로 접어도 겹치고 돌려도 똑같은 완벽한 대칭 무늬예요.',
+    targetMode: 'mirror',
+    targetAxis: 'both',
     renderSvg: (className = 'w-full h-full') => (
       <svg viewBox="0 0 100 100" className={className} fill="none">
         {/* Outer square frame */}
@@ -211,6 +224,7 @@ export const TRADITIONAL_PATTERNS: TraditionalPattern[] = [
     source: '한국문화정보원',
     symmetryType: '대칭 아님 (비대칭)',
     description: '자유롭게 흘러가는 뭉게구름처럼 대칭이 아닌 무늬예요.',
+    targetMode: 'none',
     renderSvg: (className = 'w-full h-full') => (
       <svg viewBox="0 0 100 100" className={className} fill="none">
         <path
