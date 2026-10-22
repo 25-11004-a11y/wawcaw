@@ -14,6 +14,14 @@
     -webkit-user-select: none;
     -webkit-touch-callout: none;
   }
+
+  button, [role="button"] {
+    touch-action: manipulation;
+  }
+
+  canvas {
+    touch-action: none;
+  }
 }
 
 .font-jua {

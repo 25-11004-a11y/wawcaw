@@ -1,9 +1,18 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Stroke, Point, TOGETHER_LEFT_COLORS, TOGETHER_RIGHT_COLORS } from '../constants';
+import {
+  Stroke,
+  Point,
+  TOGETHER_LEFT_COLORS,
+  TOGETHER_RIGHT_COLORS,
+  ERASER_SIZES,
+  ToolType,
+} from '../constants';
 import { mirrorV } from '../symmetry';
 import { saveSession } from '../storage';
 import { playDrawStartSound, playClickSound, playWobbleSound } from '../sound';
-import { Home, Undo2, Star, Sparkles } from 'lucide-react';
+import { Home, Undo2, Star, Sparkles, Paintbrush, Eraser, Hand } from 'lucide-react';
+import { isStrokeHit, HistoryAction, FadingStroke } from '../strokeEraser';
+import { ActiveFadingStroke } from '../renderer';
 
 interface TogetherScreenProps {
   onHome: () => void;
@@ -15,117 +24,260 @@ interface ActivePointerTrack {
   stroke: Stroke;
 }
 
+function drawSparkle(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+  alpha: number
+) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+  ctx.fillStyle = '#FFD23F';
+  ctx.strokeStyle = '#3A3350';
+  ctx.lineWidth = Math.max(1.5, size * 0.1);
+  ctx.beginPath();
+  const spikes = 4;
+  for (let i = 0; i < spikes * 2; i++) {
+    const r = i % 2 === 0 ? size : size * 0.35;
+    const angle = (i * Math.PI) / spikes - Math.PI / 2;
+    const px = cx + Math.cos(angle) * r;
+    const py = cy + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish }) => {
+  const [leftTool, setLeftTool] = useState<ToolType>('brush');
+  const [rightTool, setRightTool] = useState<ToolType>('brush');
   const [leftColor, setLeftColor] = useState<string>(TOGETHER_LEFT_COLORS[0]);
   const [rightColor, setRightColor] = useState<string>(TOGETHER_RIGHT_COLORS[0]);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [isMirrorActive, setIsMirrorActive] = useState<boolean>(false);
   const [finishBounce, setFinishBounce] = useState<boolean>(false);
 
+  // Independent action histories for each player's undo
+  const [leftHistory, setLeftHistory] = useState<HistoryAction[]>([]);
+  const [rightHistory, setRightHistory] = useState<HistoryAction[]>([]);
+
   // Session stats tracking
   const startTimeRef = useRef<number>(Date.now());
   const strokesRef = useRef<Stroke[]>([]);
   strokesRef.current = strokes;
 
-  // Multi-touch active tracking per pointerId
+  // Multi-touch active tracking per pointerId for drawing
   const activePointersRef = useRef<Map<number, ActivePointerTrack>>(new Map());
+
+  // Multi-touch active tracking for stroke eraser
+  const activeStrokeErasersRef = useRef<
+    Map<number, { owner: 'left' | 'right'; deleted: { stroke: Stroke; index: number }[] }>
+  >(new Map());
+
+  // Fading strokes for stroke eraser animation (0.2s duration)
+  const fadingStrokesRef = useRef<FadingStroke[]>([]);
+  const animFrameRef = useRef<number | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Redraw canvas
-  const redraw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  const redraw = useCallback(
+    (activeFading?: ActiveFadingStroke[]) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+      const width = canvas.width;
+      const height = canvas.height;
 
-    // Clear white background
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, width, height);
+      // 1. Offscreen transparent layer for strokes
+      const layerCanvas = document.createElement('canvas');
+      layerCanvas.width = width;
+      layerCanvas.height = height;
+      const layerCtx = layerCanvas.getContext('2d');
+      if (!layerCtx) return;
 
-    // Subtle background tint for sides
-    ctx.fillStyle = '#F5FAFF';
-    ctx.fillRect(0, 0, width * 0.5, height);
-
-    // Center divider line
-    ctx.save();
-    ctx.strokeStyle = '#3A3350';
-    ctx.lineWidth = Math.max(3, width * 0.006);
-    ctx.beginPath();
-    ctx.moveTo(width * 0.5, 0);
-    ctx.lineTo(width * 0.5, height);
-    ctx.stroke();
-    ctx.restore();
-
-    // Draw all completed and ongoing strokes
-    for (const stroke of strokesRef.current) {
-      if (stroke.points.length === 0) continue;
-      const pixelSize = stroke.size * width;
-
-      ctx.save();
-      ctx.strokeStyle = stroke.color;
-      ctx.fillStyle = stroke.color;
-      ctx.lineWidth = pixelSize;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      if (stroke.points.length === 1) {
-        ctx.beginPath();
-        ctx.arc(stroke.points[0].x * width, stroke.points[0].y * height, pixelSize / 2, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
-        for (let i = 1; i < stroke.points.length - 1; i++) {
-          const pCurr = stroke.points[i];
-          const pNext = stroke.points[i + 1];
-          const midX = (pCurr.x + pNext.x) / 2;
-          const midY = (pCurr.y + pNext.y) / 2;
-          ctx.quadraticCurveTo(pCurr.x * width, pCurr.y * height, midX * width, midY * height);
-        }
-        const last = stroke.points[stroke.points.length - 1];
-        ctx.lineTo(last.x * width, last.y * height);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // If '거울 비추기' is held active: overlay left strokes mirrored onto the right side!
-    if (isMirrorActive) {
-      const leftStrokes = strokesRef.current.filter((s) => s.owner === 'left');
-      ctx.save();
-      ctx.strokeStyle = '#8C6CFF'; // Purple dashed mirror outline
-      ctx.lineWidth = Math.max(3.5, width * 0.009);
-      ctx.setLineDash([8, 8]);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      for (const stroke of leftStrokes) {
+      // Draw all completed and ongoing strokes onto layerCanvas
+      for (const stroke of strokesRef.current) {
         if (stroke.points.length === 0) continue;
-        const mirroredPoints = stroke.points.map(mirrorV);
+        const pixelSize = stroke.size * width;
 
-        ctx.beginPath();
-        ctx.moveTo(mirroredPoints[0].x * width, mirroredPoints[0].y * height);
-        for (let i = 1; i < mirroredPoints.length - 1; i++) {
-          const pCurr = mirroredPoints[i];
-          const pNext = mirroredPoints[i + 1];
-          const midX = (pCurr.x + pNext.x) / 2;
-          const midY = (pCurr.y + pNext.y) / 2;
-          ctx.quadraticCurveTo(pCurr.x * width, pCurr.y * height, midX * width, midY * height);
+        layerCtx.save();
+        if (stroke.kind === 'eraser') {
+          layerCtx.globalCompositeOperation = 'destination-out';
+          layerCtx.strokeStyle = 'rgba(0,0,0,1)';
+          layerCtx.fillStyle = 'rgba(0,0,0,1)';
+        } else {
+          layerCtx.globalCompositeOperation = 'source-over';
+          layerCtx.strokeStyle = stroke.color;
+          layerCtx.fillStyle = stroke.color;
         }
-        const last = mirroredPoints[mirroredPoints.length - 1];
-        ctx.lineTo(last.x * width, last.y * height);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-  }, [isMirrorActive]);
+        layerCtx.lineWidth = pixelSize;
+        layerCtx.lineCap = 'round';
+        layerCtx.lineJoin = 'round';
 
-  // Handle Resize
+        if (stroke.points.length === 1) {
+          layerCtx.beginPath();
+          layerCtx.arc(stroke.points[0].x * width, stroke.points[0].y * height, pixelSize / 2, 0, Math.PI * 2);
+          layerCtx.fill();
+        } else {
+          layerCtx.beginPath();
+          layerCtx.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
+          for (let i = 1; i < stroke.points.length - 1; i++) {
+            const pCurr = stroke.points[i];
+            const pNext = stroke.points[i + 1];
+            const midX = (pCurr.x + pNext.x) / 2;
+            const midY = (pCurr.y + pNext.y) / 2;
+            layerCtx.quadraticCurveTo(pCurr.x * width, pCurr.y * height, midX * width, midY * height);
+          }
+          const last = stroke.points[stroke.points.length - 1];
+          layerCtx.lineTo(last.x * width, last.y * height);
+          layerCtx.stroke();
+        }
+        layerCtx.restore();
+      }
+
+      // 2. Prepare canvas background
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+
+      // Clear white background
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, width, height);
+
+      // Subtle background tint for left side
+      ctx.fillStyle = '#F5FAFF';
+      ctx.fillRect(0, 0, width * 0.5, height);
+
+      // 3. Composite strokes
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(layerCanvas, 0, 0);
+
+      // 3-1. Draw fading strokes & sparkles (stroke eraser feedback)
+      if (activeFading && activeFading.length > 0) {
+        for (const item of activeFading) {
+          if (item.alpha <= 0) continue;
+          ctx.save();
+          ctx.globalAlpha = item.alpha;
+          const pixelSize = item.stroke.size * width;
+          ctx.strokeStyle = item.stroke.color;
+          ctx.fillStyle = item.stroke.color;
+          ctx.lineWidth = pixelSize;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+
+          if (item.stroke.points.length === 1) {
+            ctx.beginPath();
+            ctx.arc(item.stroke.points[0].x * width, item.stroke.points[0].y * height, pixelSize / 2, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (item.stroke.points.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(item.stroke.points[0].x * width, item.stroke.points[0].y * height);
+            for (let i = 1; i < item.stroke.points.length - 1; i++) {
+              const pCurr = item.stroke.points[i];
+              const pNext = item.stroke.points[i + 1];
+              const midX = (pCurr.x + pNext.x) / 2;
+              const midY = (pCurr.y + pNext.y) / 2;
+              ctx.quadraticCurveTo(pCurr.x * width, pCurr.y * height, midX * width, midY * height);
+            }
+            const last = item.stroke.points[item.stroke.points.length - 1];
+            ctx.lineTo(last.x * width, last.y * height);
+            ctx.stroke();
+          }
+          drawSparkle(ctx, item.hitPoint.x * width, item.hitPoint.y * height, Math.max(10, width * 0.035), item.alpha);
+          ctx.restore();
+        }
+      }
+
+      // 4. Center divider line
+      ctx.strokeStyle = '#3A3350';
+      ctx.lineWidth = Math.max(3, width * 0.006);
+      ctx.beginPath();
+      ctx.moveTo(width * 0.5, 0);
+      ctx.lineTo(width * 0.5, height);
+      ctx.stroke();
+      ctx.restore();
+
+      // 5. If '거울 비추기' is held active: overlay left brush strokes mirrored onto the right side!
+      if (isMirrorActive) {
+        const leftStrokes = strokesRef.current.filter((s) => s.owner === 'left' && s.kind !== 'eraser');
+        ctx.save();
+        ctx.strokeStyle = '#8C6CFF'; // Purple dashed mirror outline
+        ctx.lineWidth = Math.max(3.5, width * 0.009);
+        ctx.setLineDash([8, 8]);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        for (const stroke of leftStrokes) {
+          if (stroke.points.length === 0) continue;
+          const mirroredPoints = stroke.points.map(mirrorV);
+
+          ctx.beginPath();
+          ctx.moveTo(mirroredPoints[0].x * width, mirroredPoints[0].y * height);
+          for (let i = 1; i < mirroredPoints.length - 1; i++) {
+            const pCurr = mirroredPoints[i];
+            const pNext = mirroredPoints[i + 1];
+            const midX = (pCurr.x + pNext.x) / 2;
+            const midY = (pCurr.y + pNext.y) / 2;
+            ctx.quadraticCurveTo(pCurr.x * width, pCurr.y * height, midX * width, midY * height);
+          }
+          const last = mirroredPoints[mirroredPoints.length - 1];
+          ctx.lineTo(last.x * width, last.y * height);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    },
+    [isMirrorActive]
+  );
+
+  const redrawRef = useRef(redraw);
+  redrawRef.current = redraw;
+
+  // Start 0.2s fading animation loop
+  const startFadingAnimation = useCallback(() => {
+    if (animFrameRef.current !== null) return;
+
+    const frame = () => {
+      const now = performance.now();
+      fadingStrokesRef.current = fadingStrokesRef.current.filter(
+        (f) => now - f.startTime < f.duration
+      );
+
+      const activeFading: ActiveFadingStroke[] = fadingStrokesRef.current.map((f) => ({
+        stroke: f.stroke,
+        alpha: Math.max(0, 1 - (now - f.startTime) / f.duration),
+        hitPoint: f.hitPoint,
+      }));
+
+      redrawRef.current(activeFading);
+
+      if (fadingStrokesRef.current.length > 0) {
+        animFrameRef.current = requestAnimationFrame(frame);
+      } else {
+        animFrameRef.current = null;
+        redrawRef.current();
+      }
+    };
+
+    animFrameRef.current = requestAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+    };
+  }, []);
+
+  // Handle Resize - strictly only on window resize or initial mount
   const handleResize = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -141,8 +293,8 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
     canvas.style.width = `${size}px`;
     canvas.style.height = `${size}px`;
 
-    redraw();
-  }, [redraw]);
+    redrawRef.current();
+  }, []);
 
   useEffect(() => {
     handleResize();
@@ -167,6 +319,50 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
     };
   };
 
+  // Erase strokes intersecting pt belonging to the specific player
+  const eraseTogetherStrokes = useCallback(
+    (owner: 'left' | 'right', pt: Point, pointerId: number) => {
+      setStrokes((prevStrokes) => {
+        const remaining: Stroke[] = [];
+        const newlyDeleted: { stroke: Stroke; index: number }[] = [];
+
+        for (let i = 0; i < prevStrokes.length; i++) {
+          const s = prevStrokes[i];
+          // Only delete strokes drawn by this person, and never rub-erasers
+          if (s.owner !== owner || s.kind === 'eraser') {
+            remaining.push(s);
+            continue;
+          }
+
+          if (isStrokeHit(pt, s, [(p) => p], 0.03)) {
+            newlyDeleted.push({ stroke: s, index: i });
+            fadingStrokesRef.current.push({
+              stroke: s,
+              startTime: performance.now(),
+              duration: 200,
+              hitPoint: pt,
+              transforms: [(p) => p],
+            });
+          } else {
+            remaining.push(s);
+          }
+        }
+
+        if (newlyDeleted.length > 0) {
+          playClickSound();
+          const tracker = activeStrokeErasersRef.current.get(pointerId);
+          if (tracker) {
+            tracker.deleted.push(...newlyDeleted);
+          }
+          startFadingAnimation();
+          return remaining;
+        }
+        return prevStrokes;
+      });
+    },
+    [startFadingAnimation]
+  );
+
   // Pointer Down
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const pt = getNormalizedPoint(e);
@@ -174,13 +370,23 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
 
     // Determine owner based on touch starting coordinate: Left half (<=0.5) vs Right half (>0.5)
     const owner: 'left' | 'right' = pt.x <= 0.5 ? 'left' : 'right';
-    const color = owner === 'left' ? leftColor : rightColor;
+    const activeTool = owner === 'left' ? leftTool : rightTool;
+
+    if (activeTool === 'strokeEraser') {
+      activeStrokeErasersRef.current.set(e.pointerId, { owner, deleted: [] });
+      e.currentTarget.setPointerCapture(e.pointerId);
+      eraseTogetherStrokes(owner, pt, e.pointerId);
+      return;
+    }
+
+    const color = activeTool === 'eraser' ? '#000000' : (owner === 'left' ? leftColor : rightColor);
+    const size = activeTool === 'eraser' ? ERASER_SIZES.medium : 0.02;
 
     const newStroke: Stroke = {
       id: `together_${owner}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      kind: 'brush',
+      kind: activeTool === 'eraser' ? 'eraser' : 'brush',
       color,
-      size: 0.02,
+      size,
       points: [pt],
       owner,
     };
@@ -189,11 +395,32 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
     e.currentTarget.setPointerCapture(e.pointerId);
 
     setStrokes((prev) => [...prev, newStroke]);
+    if (owner === 'left') {
+      setLeftHistory((prev) => [...prev, { type: 'add', stroke: newStroke, owner: 'left' }]);
+    } else {
+      setRightHistory((prev) => [...prev, { type: 'add', stroke: newStroke, owner: 'right' }]);
+    }
     playDrawStartSound();
   };
 
   // Pointer Move
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // 1. Handle stroke eraser
+    if (activeStrokeErasersRef.current.has(e.pointerId)) {
+      const track = activeStrokeErasersRef.current.get(e.pointerId)!;
+      const pt = getNormalizedPoint(e);
+      if (!pt) return;
+      let clampedX = pt.x;
+      if (track.owner === 'left') {
+        clampedX = Math.min(0.5, clampedX);
+      } else {
+        clampedX = Math.max(0.5, clampedX);
+      }
+      eraseTogetherStrokes(track.owner, { x: clampedX, y: pt.y }, e.pointerId);
+      return;
+    }
+
+    // 2. Handle brush or rub-eraser
     const track = activePointersRef.current.get(e.pointerId);
     if (!track) return;
 
@@ -229,6 +456,25 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
 
   // Pointer Up
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (activeStrokeErasersRef.current.has(e.pointerId)) {
+      const track = activeStrokeErasersRef.current.get(e.pointerId)!;
+      if (track.deleted.length > 0) {
+        const items = [...track.deleted];
+        if (track.owner === 'left') {
+          setLeftHistory((prev) => [...prev, { type: 'delete', items, owner: 'left' }]);
+        } else {
+          setRightHistory((prev) => [...prev, { type: 'delete', items, owner: 'right' }]);
+        }
+      }
+      activeStrokeErasersRef.current.delete(e.pointerId);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+      return;
+    }
+
     if (activePointersRef.current.has(e.pointerId)) {
       activePointersRef.current.delete(e.pointerId);
       try {
@@ -241,24 +487,48 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
 
   // Undo Person 1 (left)
   const handleUndoLeft = () => {
+    if (leftHistory.length === 0) return;
     playClickSound();
-    setStrokes((prev) => {
-      const reversedIdx = [...prev].reverse().findIndex((s) => s.owner === 'left');
-      if (reversedIdx === -1) return prev;
-      const actualIdx = prev.length - 1 - reversedIdx;
-      return prev.filter((_, idx) => idx !== actualIdx);
-    });
+
+    const lastAction = leftHistory[leftHistory.length - 1];
+    setLeftHistory((prev) => prev.slice(0, -1));
+
+    if (lastAction.type === 'add') {
+      setStrokes((prev) => prev.filter((s) => s.id !== lastAction.stroke.id));
+    } else if (lastAction.type === 'delete') {
+      setStrokes((prev) => {
+        const next = [...prev];
+        const sorted = [...lastAction.items].sort((a, b) => a.index - b.index);
+        for (const item of sorted) {
+          const insertIdx = Math.max(0, Math.min(item.index, next.length));
+          next.splice(insertIdx, 0, item.stroke);
+        }
+        return next;
+      });
+    }
   };
 
   // Undo Person 2 (right)
   const handleUndoRight = () => {
+    if (rightHistory.length === 0) return;
     playClickSound();
-    setStrokes((prev) => {
-      const reversedIdx = [...prev].reverse().findIndex((s) => s.owner === 'right');
-      if (reversedIdx === -1) return prev;
-      const actualIdx = prev.length - 1 - reversedIdx;
-      return prev.filter((_, idx) => idx !== actualIdx);
-    });
+
+    const lastAction = rightHistory[rightHistory.length - 1];
+    setRightHistory((prev) => prev.slice(0, -1));
+
+    if (lastAction.type === 'add') {
+      setStrokes((prev) => prev.filter((s) => s.id !== lastAction.stroke.id));
+    } else if (lastAction.type === 'delete') {
+      setStrokes((prev) => {
+        const next = [...prev];
+        const sorted = [...lastAction.items].sort((a, b) => a.index - b.index);
+        for (const item of sorted) {
+          const insertIdx = Math.max(0, Math.min(item.index, next.length));
+          next.splice(insertIdx, 0, item.stroke);
+        }
+        return next;
+      });
+    }
   };
 
   // Finish Together Mode
@@ -365,8 +635,75 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
             하나
           </div>
 
+          {/* Tool switch: Brush / Eraser / StrokeEraser */}
+          <div className="flex flex-col gap-1 w-full">
+            <div className="flex gap-1 w-full">
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setLeftTool('brush');
+                }}
+                aria-label="하나 붓 선택"
+                aria-pressed={leftTool === 'brush'}
+                className={`
+                  flex-1 min-h-[42px] rounded-xl border-2 border-[#3A3350] font-jua text-xs
+                  flex flex-col items-center justify-center p-0.5 cursor-pointer transition-all
+                  ${leftTool === 'brush' ? 'bg-[#7FD8BE] shadow-xs' : 'bg-white'}
+                `}
+              >
+                <Paintbrush className="w-3.5 h-3.5 text-[#3A3350]" />
+                <span className="text-[10px] mt-0.5">붓</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setLeftTool('eraser');
+                }}
+                aria-label="하나 지우개 선택"
+                aria-pressed={leftTool === 'eraser'}
+                className={`
+                  flex-1 min-h-[42px] rounded-xl border-2 border-[#3A3350] font-jua text-xs
+                  flex flex-col items-center justify-center p-0.5 cursor-pointer transition-all
+                  ${leftTool === 'eraser' ? 'bg-[#FF9EB5] shadow-xs' : 'bg-white'}
+                `}
+              >
+                <Eraser className="w-3.5 h-3.5 text-[#3A3350]" />
+                <span className="text-[10px] mt-0.5">지우개</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setLeftTool('strokeEraser');
+              }}
+              aria-label="하나 획 지우개 선택"
+              aria-pressed={leftTool === 'strokeEraser'}
+              className={`
+                w-full min-h-[38px] rounded-xl border-2 border-[#3A3350] font-jua text-xs
+                flex items-center justify-center gap-1 p-0.5 cursor-pointer transition-all
+                ${leftTool === 'strokeEraser' ? 'bg-[#B9A3FF] text-[#3A3350] shadow-xs' : 'bg-white'}
+              `}
+            >
+              <div className="relative flex items-center justify-center">
+                <Eraser className="w-3.5 h-3.5" />
+                <Hand className="w-2.5 h-2.5 absolute -bottom-0.5 -right-1 text-[#FF5C8A]" />
+              </div>
+              <span className="text-[10px]">획 지우개</span>
+            </button>
+          </div>
+
           {/* 4 Colors */}
-          <div className="flex flex-col gap-2.5 my-auto">
+          <div
+            className={`flex flex-col gap-2.5 my-auto transition-opacity ${
+              leftTool === 'eraser' || leftTool === 'strokeEraser'
+                ? 'opacity-30 pointer-events-none select-none'
+                : 'opacity-100'
+            }`}
+            aria-hidden={leftTool === 'eraser' || leftTool === 'strokeEraser'}
+          >
             {TOGETHER_LEFT_COLORS.map((color) => {
               const isSelected = leftColor === color;
               return (
@@ -400,8 +737,9 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
           <button
             type="button"
             onClick={handleUndoLeft}
+            disabled={leftHistory.length === 0}
             aria-label="하나 되돌리기"
-            className="w-full min-h-[56px] rounded-2xl bg-white border-[3px] border-[#3A3350] font-jua text-xs jelly-btn flex flex-col items-center justify-center p-1 cursor-pointer"
+            className="w-full min-h-[56px] rounded-2xl bg-white border-[3px] border-[#3A3350] font-jua text-xs jelly-btn flex flex-col items-center justify-center p-1 cursor-pointer disabled:opacity-40"
           >
             <Undo2 className="w-5 h-5 text-[#3A3350]" />
             <span className="mt-0.5">되돌리기</span>
@@ -411,7 +749,7 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
         {/* CENTER CANVAS */}
         <div
           ref={containerRef}
-          className="flex-1 w-full flex flex-col items-center justify-center min-h-[300px] md:min-h-[480px] p-1 relative"
+          className="flex-1 w-full flex flex-col items-center justify-center min-w-0 min-h-0 min-h-[300px] md:min-h-[480px] p-1 relative overflow-hidden"
         >
           <div className="relative border-4 border-[#3A3350] rounded-3xl overflow-hidden shadow-[0_8px_0_#3A3350] bg-white">
             <canvas
@@ -438,8 +776,75 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
             둘
           </div>
 
+          {/* Tool switch: Brush / Eraser / StrokeEraser */}
+          <div className="flex flex-col gap-1 w-full">
+            <div className="flex gap-1 w-full">
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setRightTool('brush');
+                }}
+                aria-label="둘 붓 선택"
+                aria-pressed={rightTool === 'brush'}
+                className={`
+                  flex-1 min-h-[42px] rounded-xl border-2 border-[#3A3350] font-jua text-xs
+                  flex flex-col items-center justify-center p-0.5 cursor-pointer transition-all
+                  ${rightTool === 'brush' ? 'bg-[#7FD8BE] shadow-xs' : 'bg-white'}
+                `}
+              >
+                <Paintbrush className="w-3.5 h-3.5 text-[#3A3350]" />
+                <span className="text-[10px] mt-0.5">붓</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setRightTool('eraser');
+                }}
+                aria-label="둘 지우개 선택"
+                aria-pressed={rightTool === 'eraser'}
+                className={`
+                  flex-1 min-h-[42px] rounded-xl border-2 border-[#3A3350] font-jua text-xs
+                  flex flex-col items-center justify-center p-0.5 cursor-pointer transition-all
+                  ${rightTool === 'eraser' ? 'bg-[#FF9EB5] shadow-xs' : 'bg-white'}
+                `}
+              >
+                <Eraser className="w-3.5 h-3.5 text-[#3A3350]" />
+                <span className="text-[10px] mt-0.5">지우개</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setRightTool('strokeEraser');
+              }}
+              aria-label="둘 획 지우개 선택"
+              aria-pressed={rightTool === 'strokeEraser'}
+              className={`
+                w-full min-h-[38px] rounded-xl border-2 border-[#3A3350] font-jua text-xs
+                flex items-center justify-center gap-1 p-0.5 cursor-pointer transition-all
+                ${rightTool === 'strokeEraser' ? 'bg-[#B9A3FF] text-[#3A3350] shadow-xs' : 'bg-white'}
+              `}
+            >
+              <div className="relative flex items-center justify-center">
+                <Eraser className="w-3.5 h-3.5" />
+                <Hand className="w-2.5 h-2.5 absolute -bottom-0.5 -right-1 text-[#FF5C8A]" />
+              </div>
+              <span className="text-[10px]">획 지우개</span>
+            </button>
+          </div>
+
           {/* 4 Colors */}
-          <div className="flex flex-col gap-2.5 my-auto">
+          <div
+            className={`flex flex-col gap-2.5 my-auto transition-opacity ${
+              rightTool === 'eraser' || rightTool === 'strokeEraser'
+                ? 'opacity-30 pointer-events-none select-none'
+                : 'opacity-100'
+            }`}
+            aria-hidden={rightTool === 'eraser' || rightTool === 'strokeEraser'}
+          >
             {TOGETHER_RIGHT_COLORS.map((color) => {
               const isSelected = rightColor === color;
               return (
@@ -473,8 +878,9 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
           <button
             type="button"
             onClick={handleUndoRight}
+            disabled={rightHistory.length === 0}
             aria-label="둘 되돌리기"
-            className="w-full min-h-[56px] rounded-2xl bg-white border-[3px] border-[#3A3350] font-jua text-xs jelly-btn flex flex-col items-center justify-center p-1 cursor-pointer"
+            className="w-full min-h-[56px] rounded-2xl bg-white border-[3px] border-[#3A3350] font-jua text-xs jelly-btn flex flex-col items-center justify-center p-1 cursor-pointer disabled:opacity-40"
           >
             <Undo2 className="w-5 h-5 text-[#3A3350]" />
             <span className="mt-0.5">되돌리기</span>

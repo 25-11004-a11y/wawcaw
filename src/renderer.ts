@@ -2,15 +2,24 @@ import { Stroke, Point, Mode, MirrorAxis } from './constants';
 import { TransformFn } from './symmetry';
 import { FISH_EYE_OFFSET } from './stamps';
 
+export interface ActiveFadingStroke {
+  stroke: Stroke;
+  alpha: number; // 0 to 1
+  hitPoint: Point;
+  transforms?: TransformFn[];
+}
+
 export interface RenderOptions {
   showGuidelines?: boolean;
   mode?: Mode;
   axis?: MirrorAxis;
   onlyOriginals?: boolean; // When in '짠!' unrevealed mode, only draw original strokes
+  hasUnderlay?: boolean; // When trace underlay is shown, keep main canvas background transparent
+  fadingStrokes?: ActiveFadingStroke[];
 }
 
 /**
- * Draws a single transformed stroke (brush or stamp) on the 2D canvas context.
+ * Draws a single transformed stroke (brush, stamp, or eraser) on the 2D canvas context.
  */
 function drawSingleTransformedStroke(
   ctx: CanvasRenderingContext2D,
@@ -21,20 +30,28 @@ function drawSingleTransformedStroke(
 ) {
   const pixelSize = stroke.size * width;
 
-  if (stroke.kind === 'brush') {
+  if (stroke.kind === 'brush' || stroke.kind === 'eraser') {
     if (stroke.points.length === 0) return;
 
     const transformedPoints = stroke.points.map(transform);
 
     ctx.save();
-    ctx.strokeStyle = stroke.color;
-    ctx.fillStyle = stroke.color;
+    if (stroke.kind === 'eraser') {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.strokeStyle = 'rgba(0,0,0,1)';
+      ctx.fillStyle = 'rgba(0,0,0,1)';
+    } else {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = stroke.color;
+      ctx.fillStyle = stroke.color;
+    }
+
     ctx.lineWidth = pixelSize;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
     if (transformedPoints.length === 1) {
-      // Single tap brush dot
+      // Single tap brush/eraser dot
       const pt = transformedPoints[0];
       ctx.beginPath();
       ctx.arc(pt.x * width, pt.y * height, pixelSize / 2, 0, Math.PI * 2);
@@ -70,6 +87,7 @@ function drawSingleTransformedStroke(
     const transformedPoints = stroke.points.map(transform);
 
     ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
     ctx.beginPath();
     ctx.moveTo(transformedPoints[0].x * width, transformedPoints[0].y * height);
 
@@ -91,7 +109,6 @@ function drawSingleTransformedStroke(
 
     // Special detail for fish: transformed eye dot
     if (stroke.stampShape === 'fish' && stroke.points.length > 0) {
-      // Calculate center of original fish
       let sumX = 0;
       let sumY = 0;
       for (const p of stroke.points) {
@@ -101,13 +118,11 @@ function drawSingleTransformedStroke(
       const cx = sumX / stroke.points.length;
       const cy = sumY / stroke.points.length;
 
-      // Transform eye coordinate
       const origEye: Point = {
         x: cx + FISH_EYE_OFFSET.x * stroke.size,
         y: cy + FISH_EYE_OFFSET.y * stroke.size,
       };
       const transEye = transform(origEye);
-
       const eyeRadius = Math.max(2.5, width * stroke.size * 0.05);
 
       // Eye white
@@ -141,6 +156,7 @@ function drawGuidelines(
   axis: MirrorAxis
 ) {
   ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
 
   if (mode === 'mirror') {
     ctx.strokeStyle = '#7FD8BE'; // Mint dashed line as requested
@@ -202,6 +218,8 @@ function drawGuidelines(
 
 /**
  * Main render function for the HTML5 Canvas.
+ * Renders all strokes on a transparent offscreen layer so eraser (destination-out)
+ * never cuts away the solid white canvas background or trace pattern underlay.
  */
 export function renderCanvas(
   canvas: HTMLCanvasElement,
@@ -215,24 +233,89 @@ export function renderCanvas(
   const width = canvas.width;
   const height = canvas.height;
 
-  // Clear canvas (white background)
-  ctx.save();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, width, height);
-  ctx.restore();
+  // 1. Transparent offscreen layer for drawing strokes
+  const layerCanvas = document.createElement('canvas');
+  layerCanvas.width = width;
+  layerCanvas.height = height;
+  const layerCtx = layerCanvas.getContext('2d');
+  if (!layerCtx) return;
 
   // If in unrevealed '짠!' mode, only the first transform (identity/original) is drawn
   const activeTransforms = options.onlyOriginals ? [transforms[0]] : transforms;
 
-  // Render all strokes
+  // Render all strokes in sequence onto layerCanvas
   for (const stroke of strokes) {
     for (const transform of activeTransforms) {
-      drawSingleTransformedStroke(ctx, stroke, transform, width, height);
+      drawSingleTransformedStroke(layerCtx, stroke, transform, width, height);
     }
   }
 
-  // Draw guidelines if enabled
+  // 2. Prepare destination canvas
+  ctx.save();
+  ctx.clearRect(0, 0, width, height);
+
+  if (!options.hasUnderlay) {
+    // Fill solid white background
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // 3. Composite drawing layer
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(layerCanvas, 0, 0);
+
+  // 3-1. Draw fading strokes and sparkles for stroke eraser (0.2s animation)
+  if (options.fadingStrokes && options.fadingStrokes.length > 0) {
+    for (const item of options.fadingStrokes) {
+      if (item.alpha <= 0) continue;
+      const transList = item.transforms || activeTransforms;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, item.alpha));
+      for (const t of transList) {
+        drawSingleTransformedStroke(ctx, item.stroke, t, width, height);
+        // Draw sparkle at hit point
+        const transHit = t(item.hitPoint);
+        drawSparkle(ctx, transHit.x * width, transHit.y * height, Math.max(10, width * 0.035), item.alpha);
+      }
+      ctx.restore();
+    }
+  }
+
+  // 4. Draw guidelines if enabled
   if (options.showGuidelines && options.mode) {
     drawGuidelines(ctx, width, height, options.mode, options.axis || 'vertical');
   }
+
+  ctx.restore();
+}
+
+/**
+ * Draws a playful 4-point star sparkle at (cx, cy).
+ */
+function drawSparkle(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+  alpha: number
+) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+  ctx.fillStyle = '#FFD23F';
+  ctx.strokeStyle = '#3A3350';
+  ctx.lineWidth = Math.max(1.5, size * 0.1);
+  ctx.beginPath();
+  const spikes = 4;
+  for (let i = 0; i < spikes * 2; i++) {
+    const r = i % 2 === 0 ? size : size * 0.35;
+    const angle = (i * Math.PI) / spikes - Math.PI / 2;
+    const px = cx + Math.cos(angle) * r;
+    const py = cy + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 }

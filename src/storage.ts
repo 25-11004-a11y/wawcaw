@@ -43,7 +43,7 @@ function optimizeStrokes(strokes: Stroke[]): Stroke[] {
 
   return strokes.map((s) => {
     let pts: Point[] = [];
-    if (s.kind === 'brush') {
+    if (s.kind === 'brush' || s.kind === 'eraser') {
       pts = s.points.filter((_, idx) => {
         if (idx === 0 || idx === s.points.length - 1) return true;
         return idx % downsampleStep === 0;

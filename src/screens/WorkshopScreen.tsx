@@ -11,6 +11,7 @@ import {
   Point,
   Stroke,
   BRUSH_SIZES,
+  ERASER_SIZES,
   STAMP_SIZES,
 } from '../constants';
 import {
@@ -19,9 +20,10 @@ import {
   clampPointToAllowedZone,
 } from '../symmetry';
 import { getStampPoints } from '../stamps';
-import { renderCanvas } from '../renderer';
+import { renderCanvas, ActiveFadingStroke } from '../renderer';
 import { saveSession } from '../storage';
 import { TraditionalPattern } from '../patterns';
+import { isStrokeHit, HistoryAction, FadingStroke } from '../strokeEraser';
 import {
   playDrawStartSound,
   playStampSound,
@@ -43,6 +45,8 @@ import {
   Star,
   Paintbrush,
   Stamp as StampIcon,
+  Eraser,
+  Hand,
   Layers,
 } from 'lucide-react';
 
@@ -108,8 +112,17 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
     }
   }, []);
 
-  // Update canvas sizing and redraw
-  const redraw = useCallback(() => {
+  // Action history for undo
+  const [history, setHistory] = useState<HistoryAction[]>([]);
+  const currentGestureDeletedRef = useRef<{ stroke: Stroke; index: number }[]>([]);
+  const isStrokeErasingRef = useRef<boolean>(false);
+
+  // Fading strokes for stroke eraser animation (0.2s fade + sparkle)
+  const fadingStrokesRef = useRef<FadingStroke[]>([]);
+  const animFrameRef = useRef<number | null>(null);
+
+  // Redraw canvas (can receive active fading strokes)
+  const redraw = useCallback((activeFading?: ActiveFadingStroke[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -121,10 +134,53 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
       mode,
       axis,
       onlyOriginals,
+      hasUnderlay: Boolean(tracePattern && showUnderlay),
+      fadingStrokes: activeFading,
     });
-  }, [mode, axis, viewMode, isRevealed, isAnimatingReveal, strokes, showGuidelines]);
+  }, [mode, axis, viewMode, isRevealed, isAnimatingReveal, strokes, showGuidelines, tracePattern, showUnderlay]);
 
-  // Resize canvas according to container
+  const redrawRef = useRef(redraw);
+  redrawRef.current = redraw;
+
+  // Start 0.2s fading animation loop
+  const startFadingAnimation = useCallback(() => {
+    if (animFrameRef.current !== null) return;
+
+    const frame = () => {
+      const now = performance.now();
+      fadingStrokesRef.current = fadingStrokesRef.current.filter(
+        (f) => now - f.startTime < f.duration
+      );
+
+      const activeFading: ActiveFadingStroke[] = fadingStrokesRef.current.map((f) => ({
+        stroke: f.stroke,
+        alpha: Math.max(0, 1 - (now - f.startTime) / f.duration),
+        hitPoint: f.hitPoint,
+        transforms: f.transforms,
+      }));
+
+      redrawRef.current(activeFading);
+
+      if (fadingStrokesRef.current.length > 0) {
+        animFrameRef.current = requestAnimationFrame(frame);
+      } else {
+        animFrameRef.current = null;
+        redrawRef.current();
+      }
+    };
+
+    animFrameRef.current = requestAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+    };
+  }, []);
+
+  // Resize canvas according to container - strictly only on window resize or initial mount
   const handleResize = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -140,8 +196,8 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
     canvas.style.width = `${size}px`;
     canvas.style.height = `${size}px`;
 
-    redraw();
-  }, [redraw]);
+    redrawRef.current();
+  }, []);
 
   useEffect(() => {
     handleResize();
@@ -175,9 +231,49 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
     }
   };
 
+  // Erase strokes intersecting point pt
+  const eraseStrokesAtPoint = useCallback((pt: Point) => {
+    const onlyOriginals = viewMode === 'peek' && !isRevealed;
+    const currentTransforms = getTransforms(mode, axis);
+    const testTransforms = onlyOriginals ? [currentTransforms[0]] : currentTransforms;
+
+    setStrokes((prevStrokes) => {
+      const remaining: Stroke[] = [];
+      const newlyDeleted: { stroke: Stroke; index: number }[] = [];
+
+      for (let i = 0; i < prevStrokes.length; i++) {
+        const s = prevStrokes[i];
+        if (s.kind === 'eraser') {
+          remaining.push(s);
+          continue;
+        }
+
+        if (isStrokeHit(pt, s, testTransforms, 0.03)) {
+          newlyDeleted.push({ stroke: s, index: i });
+          fadingStrokesRef.current.push({
+            stroke: s,
+            startTime: performance.now(),
+            duration: 200,
+            hitPoint: pt,
+            transforms: testTransforms,
+          });
+        } else {
+          remaining.push(s);
+        }
+      }
+
+      if (newlyDeleted.length > 0) {
+        playClickSound();
+        currentGestureDeletedRef.current.push(...newlyDeleted);
+        startFadingAnimation();
+        return remaining;
+      }
+      return prevStrokes;
+    });
+  }, [viewMode, isRevealed, mode, axis, startFadingAnimation]);
+
   // Pointer event handlers
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // Only accept primary pointer (first finger / mouse)
     if (activePointerIdRef.current !== null) return;
 
     const pt = getNormalizedPoint(e);
@@ -198,6 +294,13 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
 
     setLastPoint(pt);
 
+    if (tool === 'strokeEraser') {
+      isStrokeErasingRef.current = true;
+      currentGestureDeletedRef.current = [];
+      eraseStrokesAtPoint(pt);
+      return;
+    }
+
     if (tool === 'brush') {
       const newStroke: Stroke = {
         id: `stroke-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -208,6 +311,19 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
       };
       currentStrokeRef.current = newStroke;
       setStrokes((prev) => [...prev, newStroke]);
+      setHistory((prev) => [...prev, { type: 'add', stroke: newStroke }]);
+      playDrawStartSound();
+    } else if (tool === 'eraser') {
+      const newStroke: Stroke = {
+        id: `eraser-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        kind: 'eraser',
+        color: '#000000',
+        size: ERASER_SIZES[sizeLevel],
+        points: [pt],
+      };
+      currentStrokeRef.current = newStroke;
+      setStrokes((prev) => [...prev, newStroke]);
+      setHistory((prev) => [...prev, { type: 'add', stroke: newStroke }]);
       playDrawStartSound();
     } else if (tool === 'stamp') {
       const stampPoints = getStampPoints(stampShape, pt, STAMP_SIZES[sizeLevel]);
@@ -220,13 +336,26 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
         stampShape,
       };
       setStrokes((prev) => [...prev, newStroke]);
+      setHistory((prev) => [...prev, { type: 'add', stroke: newStroke }]);
       playStampSound();
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (activePointerIdRef.current !== e.pointerId) return;
-    if (tool !== 'brush') return;
+
+    if (tool === 'strokeEraser') {
+      let pt = getNormalizedPoint(e);
+      if (!pt) return;
+      if (viewMode === 'peek' && !isRevealed) {
+        pt = clampPointToAllowedZone(pt, mode, axis);
+      }
+      setLastPoint(pt);
+      eraseStrokesAtPoint(pt);
+      return;
+    }
+
+    if (tool !== 'brush' && tool !== 'eraser') return;
 
     let pt = getNormalizedPoint(e);
     if (!pt) return;
@@ -261,6 +390,15 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (activePointerIdRef.current === e.pointerId) {
+      if (isStrokeErasingRef.current) {
+        isStrokeErasingRef.current = false;
+        if (currentGestureDeletedRef.current.length > 0) {
+          const items = [...currentGestureDeletedRef.current];
+          setHistory((prev) => [...prev, { type: 'delete', items }]);
+          currentGestureDeletedRef.current = [];
+        }
+      }
+
       activePointerIdRef.current = null;
       currentStrokeRef.current = null;
       try {
@@ -271,17 +409,34 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
     }
   };
 
-  // Undo (last stroke, max 50)
+  // Undo (last action: addition or stroke deletion)
   const handleUndo = () => {
-    if (strokes.length === 0) return;
+    if (history.length === 0) return;
     playClickSound();
-    setStrokes((prev) => prev.slice(0, -1));
+
+    const lastAction = history[history.length - 1];
+    setHistory((prev) => prev.slice(0, -1));
+
+    if (lastAction.type === 'add') {
+      setStrokes((prev) => prev.filter((s) => s.id !== lastAction.stroke.id));
+    } else if (lastAction.type === 'delete') {
+      setStrokes((prev) => {
+        const next = [...prev];
+        const sorted = [...lastAction.items].sort((a, b) => a.index - b.index);
+        for (const item of sorted) {
+          const insertIdx = Math.max(0, Math.min(item.index, next.length));
+          next.splice(insertIdx, 0, item.stroke);
+        }
+        return next;
+      });
+    }
   };
 
   // Clear all
   const handleClear = () => {
     setShowClearModal(false);
     setStrokes([]);
+    setHistory([]);
     setIsRevealed(false);
   };
 
@@ -425,8 +580,8 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
 
         {/* LEFT TOOLBOX */}
         <div className="w-full lg:w-48 bg-white border-[3.5px] border-[#3A3350] rounded-3xl p-3 shadow-[0_6px_0_#3A3350] flex flex-row lg:flex-col justify-between items-center gap-3 overflow-x-auto lg:overflow-visible shrink-0">
-          {/* Tool switch: Brush / Stamp */}
-          <div className="flex lg:grid lg:grid-cols-2 gap-2 w-full">
+          {/* Tool switch: 4 tools in 2 columns (2열 배치) */}
+          <div className="grid grid-cols-2 gap-2 w-full">
             <button
               type="button"
               onClick={() => {
@@ -436,7 +591,7 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
               aria-label="붓 그리기 도구 선택"
               aria-pressed={tool === 'brush'}
               className={`
-                flex-1 min-h-[56px] lg:min-h-[64px] rounded-2xl border-[3px] border-[#3A3350] font-jua
+                min-h-[56px] lg:min-h-[60px] rounded-2xl border-[3px] border-[#3A3350] font-jua
                 flex flex-col items-center justify-center p-1 cursor-pointer transition-all
                 ${tool === 'brush' ? 'bg-[#7FD8BE] shadow-[0_2px_0_#3A3350] translate-y-[2px]' : 'bg-white jelly-btn'}
                 ${brushBounce ? 'animate-brush-bounce ring-4 ring-[#FF5C8A]' : ''}
@@ -455,24 +610,72 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
               aria-label="도장 찍기 도구 선택"
               aria-pressed={tool === 'stamp'}
               className={`
-                flex-1 min-h-[56px] lg:min-h-[64px] rounded-2xl border-[3px] border-[#3A3350] font-jua
+                min-h-[56px] lg:min-h-[60px] rounded-2xl border-[3px] border-[#3A3350] font-jua
                 flex flex-col items-center justify-center p-1 cursor-pointer transition-all
-                ${tool === 'stamp' ? 'bg-[#FF9EB5] shadow-[0_2px_0_#3A3350] translate-y-[2px]' : 'bg-white jelly-btn'}
+                ${tool === 'stamp' ? 'bg-[#FFD66B] shadow-[0_2px_0_#3A3350] translate-y-[2px]' : 'bg-white jelly-btn'}
               `}
             >
               <StampIcon className="w-5 h-5" />
               <span className="text-xs mt-0.5">도장</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setTool('eraser');
+              }}
+              aria-label="지우개 도구 선택"
+              aria-pressed={tool === 'eraser'}
+              className={`
+                min-h-[56px] lg:min-h-[60px] rounded-2xl border-[3px] border-[#3A3350] font-jua
+                flex flex-col items-center justify-center p-1 cursor-pointer transition-all
+                ${tool === 'eraser' ? 'bg-[#FF9EB5] shadow-[0_2px_0_#3A3350] translate-y-[2px]' : 'bg-white jelly-btn'}
+              `}
+            >
+              <Eraser className="w-5 h-5" />
+              <span className="text-xs mt-0.5">지우개</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                playClickSound();
+                setTool('strokeEraser');
+              }}
+              aria-label="획 지우개 도구 선택"
+              aria-pressed={tool === 'strokeEraser'}
+              className={`
+                min-h-[56px] lg:min-h-[60px] rounded-2xl border-[3px] border-[#3A3350] font-jua
+                flex flex-col items-center justify-center p-1 cursor-pointer transition-all
+                ${tool === 'strokeEraser' ? 'bg-[#B9A3FF] text-[#3A3350] shadow-[0_2px_0_#3A3350] translate-y-[2px]' : 'bg-white jelly-btn'}
+              `}
+            >
+              <div className="relative flex items-center justify-center">
+                <Eraser className="w-5 h-5" />
+                <Hand className="w-3.5 h-3.5 absolute -bottom-1 -right-2 text-[#FF5C8A]" />
+              </div>
+              <span className="text-xs mt-0.5">획 지우개</span>
+            </button>
           </div>
 
-          {/* Conditional: Colors (when brush) vs Stamps (when stamp) */}
-          {tool === 'brush' ? (
-            <div className="flex flex-col items-center">
-              <span className="font-jua text-xs text-[#3A3350]/70 mb-1 hidden lg:block">색</span>
-              <ColorPicker
-                selectedColor={selectedColor}
-                onSelectColor={setSelectedColor}
-              />
+          {/* Conditional: Colors (when brush/eraser/strokeEraser) vs Stamps (when stamp) */}
+          {tool !== 'stamp' ? (
+            <div className="flex flex-col items-center relative">
+              <span className="font-jua text-xs text-[#3A3350]/70 mb-1 hidden lg:block">
+                {tool === 'eraser' || tool === 'strokeEraser' ? '색 (사용 안함)' : '색'}
+              </span>
+              <div
+                className={`transition-opacity ${
+                  tool === 'eraser' || tool === 'strokeEraser' ? 'opacity-30 pointer-events-none select-none' : 'opacity-100'
+                }`}
+                aria-hidden={tool === 'eraser' || tool === 'strokeEraser'}
+              >
+                <ColorPicker
+                  selectedColor={selectedColor}
+                  onSelectColor={setSelectedColor}
+                />
+              </div>
             </div>
           ) : (
             <div className="flex flex-col items-center">
@@ -524,7 +727,7 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
           {/* Thickness / Size (3 options) */}
           <div className="flex flex-col items-center w-full">
             <span className="font-jua text-xs text-[#3A3350]/70 mb-1 hidden lg:block">
-              {tool === 'brush' ? '굵기' : '크기'}
+              {tool === 'stamp' ? '크기' : (tool === 'eraser' ? '지우개 굵기' : '굵기')}
             </span>
             <div className="flex lg:grid lg:grid-cols-3 gap-1.5 w-full bg-[#FAF8FF] p-1.5 rounded-2xl border-2 border-[#3A3350]">
               {(['thin', 'medium', 'thick'] as SizeLevel[]).map((lvl) => {
@@ -558,7 +761,7 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
         {/* CENTER CANVAS STAGE */}
         <div
           ref={containerRef}
-          className="flex-1 w-full flex items-center justify-center min-h-[300px] md:min-h-[480px] p-1 relative"
+          className="flex-1 w-full flex items-center justify-center min-w-0 min-h-0 min-h-[300px] md:min-h-[480px] p-1 relative overflow-hidden"
         >
           <div className="relative border-4 border-[#3A3350] rounded-3xl overflow-hidden shadow-[0_8px_0_#3A3350] bg-white">
             
@@ -789,7 +992,7 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
             <button
               type="button"
               onClick={handleUndo}
-              disabled={strokes.length === 0}
+              disabled={history.length === 0}
               aria-label="마지막 그림 되돌리기"
               className="flex-1 min-h-[56px] lg:min-h-[64px] rounded-2xl bg-white text-[#3A3350] border-[3px] border-[#3A3350] font-jua flex flex-col items-center justify-center p-1 jelly-btn cursor-pointer disabled:opacity-40"
             >

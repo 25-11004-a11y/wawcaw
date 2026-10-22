@@ -3,7 +3,7 @@ export type ArtworkMode = 'mirror' | 'spin' | 'together';
 export type MirrorAxis = 'vertical' | 'horizontal' | 'both';
 export type ArtworkAxis = 'vertical' | 'horizontal' | 'both' | 'point' | 'none';
 export type ViewMode = 'instant' | 'peek';
-export type ToolType = 'brush' | 'stamp';
+export type ToolType = 'brush' | 'stamp' | 'eraser' | 'strokeEraser';
 export type StampShape = 'circle' | 'triangle' | 'square' | 'heart' | 'star' | 'fish';
 
 export interface Point {
@@ -72,6 +72,13 @@ export const BRUSH_SIZES = {
   thin: 0.01,
   medium: 0.02,
   thick: 0.037,
+} as const;
+
+// 3 Eraser Sizes (canvas ratio - 2x brush size)
+export const ERASER_SIZES = {
+  thin: 0.02,
+  medium: 0.04,
+  thick: 0.074,
 } as const;
 
 // 3 Stamp Sizes (canvas ratio)
