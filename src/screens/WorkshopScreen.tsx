@@ -59,6 +59,66 @@ interface WorkshopScreenProps {
   tracePattern?: TraditionalPattern | null;
 }
 
+function renderStampPreviewIcon(shape: StampShape, color: string) {
+  switch (shape) {
+    case 'circle':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5">
+          <circle cx="12" cy="12" r="9" fill={color} stroke="#3A3350" strokeWidth="2.5" />
+        </svg>
+      );
+    case 'triangle':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5">
+          <polygon points="12,3 21,20 3,20" fill={color} stroke="#3A3350" strokeWidth="2.5" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'square':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5">
+          <rect x="4" y="4" width="16" height="16" rx="3" fill={color} stroke="#3A3350" strokeWidth="2.5" />
+        </svg>
+      );
+    case 'heart':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5">
+          <path
+            d="M12 21 C12 21 3 14.5 3 8.5 A 5 5 0 0 1 12 5.5 A 5 5 0 0 1 21 8.5 C 21 14.5 12 21 12 21 Z"
+            fill={color}
+            stroke="#3A3350"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'star':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5">
+          <polygon
+            points="12,2 14.9,8.5 22,9.3 16.7,14.1 18.2,21.1 12,17.5 5.8,21.1 7.3,14.1 2,9.3 9.1,8.5"
+            fill={color}
+            stroke="#3A3350"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'fish':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5">
+          <path
+            d="M 21 12 Q 17 7 11 6 Q 5 7 2 4 L 4 12 L 2 20 Q 5 17 11 18 Q 17 17 21 12 Z"
+            fill={color}
+            stroke="#3A3350"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+          <circle cx="16" cy="10.5" r="1.3" fill="#3A3350" />
+        </svg>
+      );
+  }
+}
+
 export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
   initialMode,
   onHome,
@@ -579,7 +639,7 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
       <div className="flex-1 flex flex-col lg:flex-row items-center justify-center gap-3 md:gap-5 max-w-6xl mx-auto w-full min-h-0">
 
         {/* LEFT TOOLBOX */}
-        <div className="w-full lg:w-48 bg-white border-[3.5px] border-[#3A3350] rounded-3xl p-3 shadow-[0_6px_0_#3A3350] flex flex-row lg:flex-col justify-between items-center gap-3 overflow-x-auto lg:overflow-visible shrink-0">
+        <div className="w-full lg:w-48 bg-white border-[3.5px] border-[#3A3350] rounded-3xl p-3 shadow-[0_6px_0_#3A3350] flex flex-row lg:flex-col justify-between items-center gap-2.5 overflow-x-auto lg:overflow-y-auto lg:max-h-[86vh] shrink-0">
           {/* Tool switch: 4 tools in 2 columns (2열 배치) */}
           <div className="grid grid-cols-2 gap-2 w-full">
             <button
@@ -659,28 +719,11 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
             </button>
           </div>
 
-          {/* Conditional: Colors (when brush/eraser/strokeEraser) vs Stamps (when stamp) */}
-          {tool !== 'stamp' ? (
-            <div className="flex flex-col items-center relative">
-              <span className="font-jua text-xs text-[#3A3350]/70 mb-1 hidden lg:block">
-                {tool === 'eraser' || tool === 'strokeEraser' ? '색 (사용 안함)' : '색'}
-              </span>
-              <div
-                className={`transition-opacity ${
-                  tool === 'eraser' || tool === 'strokeEraser' ? 'opacity-30 pointer-events-none select-none' : 'opacity-100'
-                }`}
-                aria-hidden={tool === 'eraser' || tool === 'strokeEraser'}
-              >
-                <ColorPicker
-                  selectedColor={selectedColor}
-                  onSelectColor={setSelectedColor}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center">
-              <span className="font-jua text-xs text-[#3A3350]/70 mb-1 hidden lg:block">도장</span>
-              <div className="grid grid-cols-2 gap-2">
+          {/* Stamp Shapes (when stamp tool is selected) */}
+          {tool === 'stamp' && (
+            <div className="flex flex-col items-center w-full">
+              <span className="font-jua text-xs text-[#3A3350]/70 mb-1 hidden lg:block">도장 모양</span>
+              <div className="grid grid-cols-3 gap-1.5 w-full">
                 {(['circle', 'triangle', 'square', 'heart', 'star', 'fish'] as StampShape[]).map((shape) => {
                   const isSelected = stampShape === shape;
                   const shapeLabels: Record<StampShape, string> = {
@@ -691,14 +734,6 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
                     star: '별',
                     fish: '물고기',
                   };
-                  const shapeIcons: Record<StampShape, string> = {
-                    circle: '🟡',
-                    triangle: '🔺',
-                    square: '🟩',
-                    heart: '💖',
-                    star: '⭐',
-                    fish: '🐟',
-                  };
 
                   return (
                     <button
@@ -708,21 +743,49 @@ export const WorkshopScreen: React.FC<WorkshopScreenProps> = ({
                         playClickSound();
                         setStampShape(shape);
                       }}
+                      title={shapeLabels[shape]}
                       aria-label={`${shapeLabels[shape]} 도장 선택`}
                       aria-pressed={isSelected}
                       className={`
-                        w-14 h-14 min-w-[56px] min-h-[56px] rounded-2xl border-[3px] border-[#3A3350] font-jua
-                        flex flex-col items-center justify-center cursor-pointer transition-all
-                        ${isSelected ? 'bg-[#FFD66B] ring-4 ring-[#3A3350]/20 shadow-[0_2px_0_#3A3350] translate-y-[2px]' : 'bg-white jelly-btn'}
+                        h-11 rounded-xl border-2 border-[#3A3350] font-jua
+                        flex items-center justify-center cursor-pointer transition-all p-1
+                        ${isSelected
+                          ? 'bg-[#FFD66B] ring-3 ring-[#3A3350]/30 shadow-[0_2px_0_#3A3350] translate-y-[1px]'
+                          : 'bg-white jelly-btn'
+                        }
                       `}
                     >
-                      <span className="text-xl leading-none">{shapeIcons[shape]}</span>
+                      {renderStampPreviewIcon(shape, selectedColor)}
                     </button>
                   );
                 })}
               </div>
             </div>
           )}
+
+          {/* Color Palette (Active for brush & stamp, dimmed for erasers) */}
+          <div className="flex flex-col items-center relative">
+            <span className="font-jua text-xs text-[#3A3350]/70 mb-1 hidden lg:block">
+              {tool === 'eraser' || tool === 'strokeEraser'
+                ? '색 (사용 안함)'
+                : tool === 'stamp'
+                ? '도장 색'
+                : '색'}
+            </span>
+            <div
+              className={`transition-opacity ${
+                tool === 'eraser' || tool === 'strokeEraser'
+                  ? 'opacity-30 pointer-events-none select-none'
+                  : 'opacity-100'
+              }`}
+              aria-hidden={tool === 'eraser' || tool === 'strokeEraser'}
+            >
+              <ColorPicker
+                selectedColor={selectedColor}
+                onSelectColor={setSelectedColor}
+              />
+            </div>
+          </div>
 
           {/* Thickness / Size (3 options) */}
           <div className="flex flex-col items-center w-full">

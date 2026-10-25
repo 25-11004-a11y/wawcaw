@@ -13,6 +13,7 @@ import { playDrawStartSound, playClickSound, playWobbleSound } from '../sound';
 import { Home, Undo2, Star, Sparkles, Paintbrush, Eraser, Hand } from 'lucide-react';
 import { isStrokeHit, HistoryAction, FadingStroke } from '../strokeEraser';
 import { ActiveFadingStroke } from '../renderer';
+import { calculateTogetherMatch, getMatchFeedback } from '../togetherMatch';
 
 interface TogetherScreenProps {
   onHome: () => void;
@@ -59,6 +60,7 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
   const [rightColor, setRightColor] = useState<string>(TOGETHER_RIGHT_COLORS[0]);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [isMirrorActive, setIsMirrorActive] = useState<boolean>(false);
+  const [matchPercent, setMatchPercent] = useState<number | null>(null);
   const [finishBounce, setFinishBounce] = useState<boolean>(false);
 
   // Independent action histories for each player's undo
@@ -586,6 +588,8 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
             type="button"
             onPointerDown={() => {
               playClickSound();
+              const percent = calculateTogetherMatch(strokesRef.current);
+              setMatchPercent(percent);
               setIsMirrorActive(true);
             }}
             onPointerUp={() => setIsMirrorActive(false)}
@@ -602,7 +606,11 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
             `}
           >
             <span className="text-xl">🪞</span>
-            <span>거울 비추기 (꾹 누르기)</span>
+            <span>
+              {isMirrorActive && matchPercent !== null
+                ? `거울 비추기 (${matchPercent}% 일치!)`
+                : '거울 비추기 (꾹 누르기)'}
+            </span>
           </button>
 
           {/* Finish Button */}
@@ -761,6 +769,23 @@ export const TogetherScreen: React.FC<TogetherScreenProps> = ({ onHome, onFinish
               className="block cursor-crosshair touch-none"
               style={{ touchAction: 'none' }}
             />
+
+            {/* Mirror Match Feedback Badge */}
+            {isMirrorActive && matchPercent !== null && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none bg-white border-[3.5px] border-[#3A3350] rounded-2xl px-4 py-2 md:px-5 md:py-2.5 shadow-[0_6px_0_#3A3350] flex items-center gap-2.5 animate-pop-in whitespace-nowrap">
+                <span className="text-2xl md:text-3xl">{getMatchFeedback(matchPercent).emoji}</span>
+                <div className="flex flex-col items-center">
+                  <span className="font-jua text-[10px] md:text-xs text-[#8C6CFF]">대칭 일치도</span>
+                  <span className="font-jua text-2xl md:text-3xl text-[#3A3350] leading-none">
+                    {matchPercent}%
+                  </span>
+                </div>
+                <div className="h-7 w-[2px] bg-[#3A3350]/20 mx-1 hidden sm:block" />
+                <span className="font-jua text-xs md:text-sm text-[#3A3350] hidden sm:inline">
+                  {getMatchFeedback(matchPercent).message}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Hint bar at bottom */}
